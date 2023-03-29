@@ -1,46 +1,8 @@
 
-#[derive(Clone)]
-pub struct Location {
-    pub line: usize,
-    pub column: usize,
-    pub filename: String,
-}
+use crate::common::Span;
 
-impl std::fmt::Display for Location {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
-        write!(f, "{}:{}:{}", self.filename, self.line, self.column)
-    }
-}
-
-impl std::fmt::Debug for Location {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
-        write!(f, "{}", self)
-    }
-}
-
-#[derive(Clone)]
-pub struct Span(pub Location, pub Location);
-
-impl std::fmt::Display for Span {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
-        write!(f, "{} - {}", self.0, self.1)
-    }
-}
-
-impl std::fmt::Debug for Span {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
-        write!(f, "{}", self)
-    }
-}
-
-
-impl Span {
-    pub fn extend(&self, other: &Span) -> Span {
-        Span(self.0.clone(), other.1.clone())
-    }
-}
-
-#[derive(Debug, Clone, PartialEq)]
+#[allow(clippy::upper_case_acronyms)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub enum TokenKind {
     And,
     Assert,

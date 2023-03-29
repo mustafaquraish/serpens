@@ -105,12 +105,13 @@ impl Parser {
         let body = if self.cur().kind == TokenKind::FatArrow {
             self.increment();
             let expr = self.parse_expression()?;
-            Rc::new(AST::Return(expr.span().clone(), expr))
+            self.consume_line_end()?;
+            Rc::new(AST::Return(*expr.span(), expr))
         } else {
             self.parse_block(/*global*/ false)?
         };
         Ok(Rc::new(AST::Function {
-            span: start.extend(&body.span()),
+            span: start.extend(body.span()),
             name: None,
             args,
             body,
@@ -132,7 +133,8 @@ impl Parser {
         let body = if self.cur().kind == TokenKind::FatArrow {
             self.increment();
             let expr = self.parse_expression()?;
-            Rc::new(AST::Return(expr.span().clone(), self.parse_expression()?))
+            self.consume_line_end()?;
+            Rc::new(AST::Return(*expr.span(), expr))
         } else {
             self.parse_block(/*global*/ false)?
         };
@@ -456,7 +458,7 @@ impl Parser {
                     ..
                 } => {
                     self.increment();
-                    let mut span = val.span().clone();
+                    let mut span = *val.span();
 
                     let start = self.parse_slice_value()?;
                     if self.cur().kind == TokenKind::RightBracket {
@@ -477,7 +479,7 @@ impl Parser {
                         span = span.extend(&self.cur().span);
                         self.increment();
                         val = Rc::new(AST::Slice {
-                            span: span.clone(),
+                            span,
                             lhs: val,
                             start,
                             end,
@@ -504,7 +506,7 @@ impl Parser {
                 } => {
                     self.increment();
                     let mut args = vec![];
-                    let mut span = val.span().clone();
+                    let mut span = *val.span();
                     loop {
                         match self.cur().kind {
                             TokenKind::RightParen => {

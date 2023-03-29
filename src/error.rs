@@ -1,4 +1,4 @@
-use crate::token::Span;
+use crate::common::Span;
 
 #[derive(Debug)]
 pub enum ErrorKind {
@@ -72,38 +72,66 @@ macro_rules! runtime_error {
 }
 pub(crate) use runtime_error;
 
-// TODO: refactor/remove
-/*
-macro_rules! _error {
-    ($span:expr, $($arg:tt)*) => {
-        {
-            let msg = format!($($arg)*);
-            let filename = &$span.filename;
-            let file_content = std::fs::read_to_string(filename).expect("couldn't open input file");
-            let lines = file_content.lines().collect::<Vec<&str>>();
-            let context = 3;
-            let min_line = if $span.line <= context {
-                1
-            } else {
-                $span.line - context - 1
-            };
-            let max_line = lines.len().min($span.line + context);
 
-            println!("╭───────────────────────────────────────────────────────────────");
-            println!("│ {}: Error: {}", $span.clone(), msg);
-            println!("├────┬──────────────────────────────────────────────────────────");
-
-            for line_no in min_line..max_line {
-                let line = lines[line_no];
-                println!("│{:>3} │ {}", line_no, line);
-                if line_no == $span.line - 1 {
-                    println!("│    ├─{}┘ \x1b[0;31m{}\x1b[0m", "─".repeat($span.column - 1), msg);
-                }
+impl Error {
+    pub fn print_with_source(&self) {
+        let msg = &self.message;
+        let filename = &self.span.0.filename;
+        let file_content = match std::fs::read_to_string(filename) {
+            Ok(content) => content,
+            Err(_) => {
+                println!("{}: Error: {}", self.span.0, msg);
+                return;
             }
+        };
+        let lines = file_content.lines().collect::<Vec<&str>>();
+        let context = 3;
 
-            println!("╰────┴──────────────────────────────────────────────────────────");
-            panic!();
+        let start = self.span.0;
+        let end = self.span.1;
+
+        let min_line = if start.line <= context {
+            1
+        } else {
+            start.line - context - 1
+        };
+        let max_line = lines.len().min(end.line + context);
+
+        println!("╭────────────────────────────────────────────────────────────────────────────────");
+        println!("│ {}: Error: {}", start, msg);
+        println!("├─────┬──────────────────────────────────────────────────────────────────────────");
+
+        for line_no in min_line..max_line {
+            let line = lines[line_no];
+            if start.line - 1 <= line_no && line_no <= end.line - 1 {
+                let highlight_start = if line_no == start.line - 1 {
+                    start.column - 1
+                } else {
+                    0
+                };
+                let highlight_end = if line_no == end.line - 1 {
+                    end.column - 1
+                } else {
+                    line.len()
+                };
+
+                let text_before = &line[..highlight_start];
+                let text_highlight = &line[highlight_start..highlight_end];
+                let text_after = &line[highlight_end..];
+                println!("│ {:>3} │ {}\x1b[0;31m{}\x1b[0m{}", line_no, text_before, text_highlight, text_after);
+
+                if start.line == end.line {
+                    if text_highlight.len() <= 1 {
+                        println!("│     │ {}\x1b[0;31m▲\x1b[0m", " ".repeat(text_before.len()));
+                    } else {
+                        println!("│     │ {}\x1b[0;31m└{}┘\x1b[0m", " ".repeat(text_before.len()), "─".repeat(text_highlight.len()-2));
+                    }
+                }
+            } else {
+                println!("│ {:>3} │ {}", line_no, line);
+            }
         }
+
+        println!("╰─────┴──────────────────────────────────────────────────────────────────────────");
     }
 }
-*/

@@ -1,6 +1,5 @@
 use crate::ast::AST;
-use crate::common::{Ref, get, make};
-use crate::token::Span;
+use crate::common::{Ref, get, make, Span};
 use crate::error::{Result, runtime_error as error};
 use crate::interpreter::Scope;
 use std::rc::Rc;
@@ -27,8 +26,8 @@ impl Iterator for StringIterator {
 }
 
 impl IteratorValue {
-    pub fn for_string(string: &String) -> IteratorValue {
-        IteratorValue(make!(StringIterator { string: string.clone(), index: 0 }))
+    pub fn for_string(string: &str) -> IteratorValue {
+        IteratorValue(make!(StringIterator { string: string.to_string(), index: 0 }))
     }
 
     pub fn for_range(start: &i64, end: &i64) -> IteratorValue {
@@ -42,7 +41,6 @@ impl std::fmt::Debug for IteratorValue {
     }
 }
 
-#[derive(Debug)]
 pub enum Value {
     Integer(i64),
     Float(f64),
@@ -59,6 +57,22 @@ pub enum Value {
     },
     Range(i64, i64),
     Nothing,
+}
+
+impl std::fmt::Debug for Value {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Value::Integer(num) => write!(f, "{}", num),
+            Value::Float(num) => write!(f, "{}", num),
+            Value::String(string) => write!(f, "{}", string),
+            Value::Boolean(boolean) => write!(f, "{}", boolean),
+            Value::Nothing => write!(f, "nothing"),
+            Value::Iterator(_) => write!(f, "<iterator>"),
+            Value::Range(start, end) => write!(f, "{}..{}", start, end),
+            Value::BuiltInFunction(name) => write!(f, "<builtin {}>", name),
+            Value::Function { name, span, .. } => write!(f, "<function {}: {}>", name, span.0),
+        }
+    }
 }
 
 impl Value {
@@ -117,12 +131,13 @@ impl Value {
         span: &Span,
     ) -> Result<Ref<Value>> {
 
-        let start = start.unwrap_or(make!(Value::Integer(0)));
-        let step = step.unwrap_or(make!(Value::Integer(1)));
+        let start = start.unwrap_or_else(|| make!(Value::Integer(0)));
+        let step = step.unwrap_or_else(|| make!(Value::Integer(1)));
         match get!(lhs) {
             Value::String(s) => {
-                let end = end.unwrap_or(make!(Value::Integer(s.len() as i64)));
-                match (get!(start), get!(end), get!(step)) {
+                let end = end.unwrap_or_else(|| make!(Value::Integer(s.len() as i64)));
+                #[allow(clippy::let_and_return)]
+                let res = match (get!(start), get!(end), get!(step)) {
                     (Value::Integer(start), Value::Integer(end), Value::Integer(step)) => {
                         if *step == 0 {
                             error!(span, "Step cannot be 0")
@@ -133,10 +148,11 @@ impl Value {
                             result.push(s.chars().nth(i as usize).unwrap());
                             i += *step;
                         }
-                        return Ok(make!(Value::String(result)))
+                        Ok(make!(Value::String(result)))
                     }
                     _ => error!(span, "Invalid types for slice"),
                 };
+                res
             },
             _ => error!(span, "Can only slice strings"),
         }
@@ -243,7 +259,7 @@ impl Value {
                     None => error!(span, "Index out of bounds"),
                 }
             }
-            _ => error!(span, "Can't index {:?} with {:?}", value, index),
+            (value, index) => error!(span, "Can't index {:?} with {:?}", value, index),
         })
     }
 }

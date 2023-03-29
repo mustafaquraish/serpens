@@ -1,11 +1,13 @@
 use crate::ast::AST;
-use crate::common::{get, make, Ref};
+use crate::common::{get, make, Ref, Span};
 use crate::error::{runtime_error as error, Result};
-use crate::token::Span;
-use crate::value::{Value, IteratorValue};
 use std::collections::HashMap;
 use std::rc::Rc;
-use crate::builtin;
+
+use crate::interpreter::value::{IteratorValue, Value};
+
+mod builtin;
+pub mod value;
 
 #[derive(Debug)]
 pub struct Scope {
@@ -60,6 +62,7 @@ type BuiltInFunctionType = fn(&Span, Vec<Ref<Value>>) -> Result<Ref<Value>>;
 pub struct Interpreter {
     builtins: HashMap<&'static str, BuiltInFunctionType>,
     control_flow: ControlFlow,
+    the_nothing: Ref<Value>,
 }
 
 macro_rules! builtins {
@@ -73,13 +76,13 @@ macro_rules! builtins {
     };
 }
 
-
 impl Interpreter {
     pub fn new() -> Self {
         let builtins = builtins!(print, len, exit);
         Self {
             builtins,
             control_flow: ControlFlow::None,
+            the_nothing: make!(Value::Nothing),
         }
     }
 
@@ -88,14 +91,18 @@ impl Interpreter {
         self.run(ast, scope)
     }
 
-    pub fn run_block_without_new_scope(&mut self, ast: &Rc<AST>, scope: Ref<Scope>) -> Result<Ref<Value>> {
+    pub fn run_block_without_new_scope(
+        &mut self,
+        ast: &Rc<AST>,
+        scope: Ref<Scope>,
+    ) -> Result<Ref<Value>> {
         match ast.as_ref() {
             AST::Block(_, stmts) => {
                 let mut last = None;
                 for stmt in stmts {
                     last = Some(self.run(stmt, scope.clone())?);
                 }
-                Ok(last.unwrap_or(make!(Value::Nothing)))
+                Ok(last.unwrap_or_else(|| self.the_nothing.clone()))
             }
             _ => unreachable!("run_block_without_scope called on non-block"),
         }
@@ -120,7 +127,7 @@ impl Interpreter {
             AST::IntegerLiteral(_, num) => make!(Value::Integer(*num)),
             AST::FloatLiteral(_, num) => make!(Value::Float(*num)),
             AST::StringLiteral(_, string) => make!(Value::String(string.clone())),
-            AST::Nothing(_) => make!(Value::Nothing),
+            AST::Nothing(_) => self.the_nothing.clone(),
 
             AST::Plus(span, left, right) => dispatch_op!(span, Value::plus, left, right),
             AST::Minus(span, left, right) => dispatch_op!(span, Value::minus, left, right),
@@ -155,18 +162,16 @@ impl Interpreter {
                 ..
             } => {
                 let func = make!(Value::Function {
-                    span: span.clone(),
-                    name: name.clone().unwrap_or("<anon>".to_string()),
+                    span: *span,
+                    name: name.clone().unwrap_or_else(|| "<anon>".to_string()),
                     args: args.clone(),
                     body: body.clone(),
                     scope: scope.clone(),
                 });
                 match name {
-                    Some(name) => {
-                        scope
-                            .borrow_mut()
-                            .insert(&name, func.clone(), false, span)?
-                    }
+                    Some(name) => scope
+                        .borrow_mut()
+                        .insert(name, func.clone(), false, span)?,
                     None => {}
                 }
                 func
@@ -196,10 +201,7 @@ impl Interpreter {
             }
 
             AST::Block(..) => {
-                let block_scope = Scope::new(
-                    Some(scope.clone()),
-                    scope.borrow().in_function,
-                );
+                let block_scope = Scope::new(Some(scope.clone()), scope.borrow().in_function);
                 self.run_block_without_new_scope(ast, block_scope)?
             }
 
@@ -218,7 +220,7 @@ impl Interpreter {
                     error!(span, "Return statement outside of function")
                 }
                 self.control_flow = ControlFlow::Return(self.run(val, scope)?);
-                make!(Value::Nothing)
+                self.the_nothing.clone()
             }
 
             AST::Assignment(span, lhs, value) => {
@@ -233,7 +235,7 @@ impl Interpreter {
                         }
                         scope
                             .borrow_mut()
-                            .insert(&name, value.clone(), true, span)?;
+                            .insert(name, value.clone(), true, span)?;
                         value
                     }
                     _ => error!(span, "Can't assign to {:?}", lhs),
@@ -241,9 +243,6 @@ impl Interpreter {
             }
 
             AST::VarDeclaration(span, name, value) => {
-                if scope.borrow_mut().vars.contains_key(name) {
-                    error!(span, "Variable {} already exists in scope", name)
-                }
                 if self.builtins.contains_key(name.as_str()) {
                     error!(
                         span,
@@ -253,7 +252,7 @@ impl Interpreter {
                 let value = self.run(value, scope.clone())?;
                 scope
                     .borrow_mut()
-                    .insert(&name, value.clone(), false, span)?;
+                    .insert(name, value.clone(), false, span)?;
                 value
             }
 
@@ -264,16 +263,17 @@ impl Interpreter {
                     Value::Boolean(false) => error!(loc, "Assertion failed"),
                     _ => error!(loc, "Assertion condition must be a boolean"),
                 }
-                make!(Value::Nothing)
+                self.the_nothing.clone()
             }
 
             AST::If(span, cond, body, else_body) => {
                 let cond = self.run(cond, scope.clone())?;
+                #[allow(clippy::let_and_return)]
                 let res = match get!(cond) {
                     Value::Boolean(true) => self.run(body, scope)?,
                     Value::Boolean(false) => match else_body {
                         Some(else_body) => self.run(else_body, scope)?,
-                        None => make!(Value::Nothing),
+                        None => self.the_nothing.clone(),
                     },
                     _ => error!(span, "If condition must be a boolean"),
                 };
@@ -300,7 +300,7 @@ impl Interpreter {
                         _ => error!(span, "While condition must be a boolean"),
                     };
                 }
-                make!(Value::Nothing)
+                self.the_nothing.clone()
             }
 
             AST::For(span, loop_var, iter, body) => {
@@ -310,11 +310,11 @@ impl Interpreter {
                     Value::Iterator(IteratorValue(iter)) => {
                         let iter = &mut *(*iter).borrow_mut();
                         for val in iter {
-                            let loop_scope = Scope::new(
-                                Some(scope.clone()),
-                                scope.borrow_mut().in_function
-                            );
-                            loop_scope.borrow_mut().insert(&loop_var, val.clone(), false, span)?;
+                            let loop_scope =
+                                Scope::new(Some(scope.clone()), scope.borrow_mut().in_function);
+                            loop_scope
+                                .borrow_mut()
+                                .insert(loop_var, val.clone(), false, span)?;
                             self.run(body, loop_scope)?;
                             match self.control_flow {
                                 ControlFlow::None => {}
@@ -329,7 +329,7 @@ impl Interpreter {
                     }
                     _ => error!(span, "For loop must iterate over an iterable"),
                 };
-                make!(Value::Nothing)
+                self.the_nothing.clone()
             }
 
             AST::Range(span, start, end) => {
@@ -340,11 +340,11 @@ impl Interpreter {
 
             AST::Break(_) => {
                 self.control_flow = ControlFlow::Break;
-                make!(Value::Nothing)
+                self.the_nothing.clone()
             }
             AST::Continue(_) => {
                 self.control_flow = ControlFlow::Continue;
-                make!(Value::Nothing)
+                self.the_nothing.clone()
             }
 
             AST::Index(span, left, right) => {
@@ -378,31 +378,29 @@ impl Interpreter {
                 let new_scope = Scope::new(Some(closure_scope.clone()), true);
                 if args.len() != func_args.len() {
                     error!(
-                        span,
+                        *span,
                         "Expected {} arguments, got {}",
                         func_args.len(),
                         args.len()
                     )
                 }
                 for (arg, value) in func_args.iter().zip(args) {
-                    new_scope
-                        .borrow_mut()
-                        .insert(&arg, value, false, span)?;
+                    new_scope.borrow_mut().insert(arg, value, false, span)?;
                 }
                 self.run(body, new_scope)?;
                 let value = if let ControlFlow::Return(value) = &self.control_flow {
                     value.clone()
                 } else {
-                    make!(Value::Nothing)
+                    self.the_nothing.clone()
                 };
                 self.control_flow = ControlFlow::None;
                 value
             }
             Value::BuiltInFunction(func) => match self.builtins.get(func.as_str()) {
                 Some(func) => func(span, args)?,
-                None => error!(span, "Built-in function {:?} not found", func),
+                None => error!(span, "Built-in function {} not found", func),
             },
-            _ => error!(span, "Can't call object {:?}", func),
+            x => error!(span, "Can't call object {:?}", x),
         });
     }
 }

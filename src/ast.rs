@@ -1,4 +1,4 @@
-use crate::token::Span;
+use crate::common::Span;
 use std::rc::Rc;
 
 #[derive(Debug)]
@@ -87,6 +87,69 @@ impl AST {
             AST::Break(span, ..) => span,
             AST::For(span, ..) => span,
             AST::Range(span, ..) => span,
+        }
+    }
+}
+
+impl std::fmt::Display for AST {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            AST::And(_, lhs, rhs) => write!(f, "({} and {})", lhs, rhs),
+            AST::Assert(_, expr) => write!(f, "assert {}", expr),
+            AST::Assignment(_, lhs, rhs) => write!(f, "{} = {}", lhs, rhs),
+            AST::Block(_, exprs) => write!(f, "<block with {} exprs>", exprs.len()),
+            AST::BooleanLiteral(_, val) => write!(f, "{}", val),
+            AST::Call(_, func, args) => {
+                write!(f, "{}(", func)?;
+                for (i, arg) in args.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}", arg)?;
+                }
+                write!(f, ")")
+            },
+            AST::Divide(_, lhs, rhs) => write!(f, "({} / {})", lhs, rhs),
+            AST::FloatLiteral(_, val) => write!(f, "{}", val),
+            AST::Function { name, .. } => write!(f, "def {} => ...", name.clone().unwrap_or_else(|| "<anon>".to_string())),
+            AST::If(_, cond, ..) => write!(f, "if {}", cond),
+            AST::Index(_, lhs, rhs) => write!(f, "{}[{}]", lhs, rhs),
+            AST::IntegerLiteral(_, val) => write!(f, "{}", val),
+            AST::Minus(_, lhs, rhs) => write!(f, "({} - {})", lhs, rhs),
+            AST::Multiply(_, lhs, rhs) => write!(f, "({} * {})", lhs, rhs),
+            AST::Not(_, expr) => write!(f, "not {}", expr),
+            AST::Nothing(_) => write!(f, "nothing"),
+            AST::Or(_, lhs, rhs) => write!(f, "({} or {})", lhs, rhs),
+            AST::Plus(_, lhs, rhs) => write!(f, "({} + {})", lhs, rhs),
+            AST::Return(_, expr) => write!(f, "return {}", expr),
+            AST::Slice { lhs, start, end, step, .. } => {
+                write!(f, "{}[", lhs)?;
+                if let Some(start) = start {
+                    write!(f, "{}", start)?;
+                }
+                write!(f, ":")?;
+                if let Some(end) = end {
+                    write!(f, "{}", end)?;
+                }
+                if let Some(step) = step {
+                    write!(f, ":{}", step)?;
+                }
+                write!(f, "]")
+            },
+            AST::StringLiteral(_, val) => write!(f, "\"{}\"", val),
+            AST::VarDeclaration(_, name, expr) => write!(f, "let {} = {}", name, expr),
+            AST::Variable(_, name) => write!(f, "{}", name),
+            AST::Equals(_, lhs, rhs) => write!(f, "({} == {})", lhs, rhs),
+            AST::NotEquals(_, lhs, rhs) => write!(f, "({} != {})", lhs, rhs),
+            AST::LessThan(_, lhs, rhs) => write!(f, "({} < {})", lhs, rhs),
+            AST::GreaterThan(_, lhs, rhs) => write!(f, "({} > {})", lhs, rhs),
+            AST::LessEquals(_, lhs, rhs) => write!(f, "({} <= {})", lhs, rhs),
+            AST::GreaterEquals(_, lhs, rhs) => write!(f, "({} >= {})", lhs, rhs),
+            AST::While(_, cond, ..) => write!(f, "while {}", cond),
+            AST::Continue(_) => write!(f, "continue"),
+            AST::Break(_) => write!(f, "break"),
+            AST::For(_, name, iter, ..) => write!(f, "for {} in {}", name, iter),
+            AST::Range(_, start, end) => write!(f, "{}..{}", start, end),
         }
     }
 }

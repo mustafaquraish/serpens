@@ -1,7 +1,6 @@
 use crate::error::{runtime_error as error, Result};
-use crate::token::Span;
-use crate::value::{Value};
-use crate::common::{get, make, Ref};
+use crate::interpreter::value::Value;
+use crate::common::{get, make, Ref, Span};
 
 pub fn print(_span: &Span, args: Vec<Ref<Value>>) -> Result<Ref<Value>> {
     for (i, arg) in args.iter().enumerate() {
@@ -16,7 +15,7 @@ pub fn print(_span: &Span, args: Vec<Ref<Value>>) -> Result<Ref<Value>> {
             Value::Nothing => print!("nothing"),
             Value::Iterator(_) => print!("<iterator>"),
             Value::Range(start, end) => print!("{}..{}", start, end),
-            _ => print!("{:?}", arg),
+            arg => print!("{:?}", arg),
         }
     }
     println!();

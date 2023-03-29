@@ -1,5 +1,6 @@
 use crate::error::{lexer_error as error, Result};
-use crate::token::{Location, Span, Token, TokenKind};
+use crate::common::{Location, Span};
+use crate::token::{Token, TokenKind};
 
 #[derive(Debug)]
 pub struct Lexer {
@@ -10,7 +11,7 @@ pub struct Lexer {
 }
 
 impl Lexer {
-    pub fn new(input: String, filename: String) -> Lexer {
+    pub fn new(input: String, filename: &'static str) -> Lexer {
         Lexer {
             location: Location {
                 line: 1,
@@ -48,11 +49,11 @@ impl Lexer {
     }
 
     fn loc(&self) -> Location {
-        self.location.clone()
+        self.location
     }
 
     fn push_simple(&mut self, tokens: &mut Vec<Token>, kind: TokenKind, len: usize) {
-        let start = self.loc().clone();
+        let start = self.loc();
         let text = self.input[self.current_index..self.current_index + len].to_string();
         for _ in 0..len {
             self.increment();
@@ -69,7 +70,7 @@ impl Lexer {
     pub fn lex(&mut self) -> Result<Vec<Token>> {
         let mut tokens: Vec<Token> = vec![];
         while let Some(c) = self.cur() {
-            let start = self.loc().clone();
+            let start = self.loc();
             match c {
                 c if c.is_whitespace() => self.increment(),
 
@@ -198,7 +199,7 @@ impl Lexer {
     }
 
     fn lex_string_literal(&mut self) -> Result<Token> {
-        let start = self.loc().clone();
+        let start = self.loc();
         let mut string = String::new();
         self.increment();
         while let Some(c) = self.cur() {
@@ -233,7 +234,7 @@ impl Lexer {
                     self.increment();
                 }
                 (_, '0'..='9' | 'a'..='f') => {
-                    error!(Span(start.clone(), self.loc()), "Invalid numerical literal");
+                    error!(Span(*start, self.loc()), "Invalid numerical literal");
                 }
                 (_, '_') => self.increment(),
                 _ => break,
