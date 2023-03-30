@@ -162,7 +162,11 @@ impl Parser {
                 self.consume(TokenKind::Equals)?;
                 let expr = self.parse_expression()?;
                 self.consume_line_end()?;
-                Ok(Rc::new(AST::VarDeclaration(span.extend(expr.span()), ident.text, expr)))
+                Ok(Rc::new(AST::VarDeclaration(
+                    span.extend(expr.span()),
+                    ident.text,
+                    expr,
+                )))
             }
             Token {
                 kind: TokenKind::If,
@@ -184,7 +188,12 @@ impl Parser {
                             TokenKind::If => self.parse_statement()?,
                             _ => self.parse_block(/*global*/ false)?,
                         };
-                        Ok(Rc::new(AST::If(span.extend(else_body.span()), cond, body, Some(else_body))))
+                        Ok(Rc::new(AST::If(
+                            span.extend(else_body.span()),
+                            cond,
+                            body,
+                            Some(else_body),
+                        )))
                     }
                     _ => Ok(Rc::new(AST::If(span, cond, body, None))),
                 }
@@ -243,11 +252,54 @@ impl Parser {
                 ..
             } => {
                 self.increment();
-                let ident = self.consume(TokenKind::Identifier)?;
-                self.consume(TokenKind::In)?;
-                let expr = self.parse_expression()?;
-                let body = self.parse_block(/*global*/ false)?;
-                Ok(Rc::new(AST::For(span.extend(body.span()), ident.text, expr, body)))
+
+                if self.cur().kind == TokenKind::LeftParen {
+                    // Traditional for loop
+                    self.increment();
+                    let init = if self.cur().kind == TokenKind::SemiColon {
+                        None
+                    } else {
+                        let init = Some(self.parse_statement()?);
+                        // If we have consumed a semicolon, we need to go back one token
+                        if self.tokens[self.current_index - 1].kind == TokenKind::SemiColon {
+                            self.current_index -= 1;
+                        }
+                        init
+                    };
+                    self.consume(TokenKind::SemiColon)?;
+                    let cond = if self.cur().kind == TokenKind::SemiColon {
+                        None
+                    } else {
+                        Some(self.parse_expression()?)
+                    };
+                    self.consume(TokenKind::SemiColon)?;
+                    let step = if self.cur().kind == TokenKind::RightParen {
+                        None
+                    } else {
+                        Some(self.parse_expression()?)
+                    };
+                    self.consume(TokenKind::RightParen)?;
+                    let body = self.parse_block(/*global*/ false)?;
+                    Ok(Rc::new(AST::For {
+                        span: span.extend(body.span()),
+                        init,
+                        cond,
+                        step,
+                        body,
+                    }))
+                } else {
+                    // For each loop
+                    let ident = self.consume(TokenKind::Identifier)?;
+                    self.consume(TokenKind::In)?;
+                    let expr = self.parse_expression()?;
+                    let body = self.parse_block(/*global*/ false)?;
+                    Ok(Rc::new(AST::ForEach(
+                        span.extend(body.span()),
+                        ident.text,
+                        expr,
+                        body,
+                    )))
+                }
             }
             Token {
                 kind: TokenKind::Return,
@@ -445,6 +497,13 @@ impl Parser {
                 let expr = self.parse_prefix()?;
                 Ok(Rc::new(AST::Not(start.extend(expr.span()), expr)))
             }
+            TokenKind::PlusPlus | TokenKind::MinusMinus => {
+                let offset = if self.cur().kind == TokenKind::PlusPlus { 1 } else { -1 };
+                let start = self.cur().span;
+                self.increment();
+                let expr = self.parse_prefix()?;
+                Ok(Rc::new(AST::PreIncrement(start.extend(expr.span()), expr, offset)))
+            }
             _ => self.parse_postfix(),
         }
     }
@@ -542,6 +601,19 @@ impl Parser {
                     let end = self.parse_atom()?;
                     val = Rc::new(AST::Range(val.span().extend(end.span()), val, end));
                 }
+                Token {
+                    kind: TokenKind::PlusPlus | TokenKind::MinusMinus,
+                    span,
+                    ..
+                } => {
+                    let offset = if self.cur().kind == TokenKind::PlusPlus { 1 } else { -1 };
+                    self.increment();
+                    val = Rc::new(AST::PostIncrement(
+                        val.span().extend(&span),
+                        val,
+                        offset,
+                    ));
+                }
                 _ => break,
             }
         }
@@ -558,6 +630,32 @@ impl Parser {
                 let expr = self.parse_expression()?;
                 self.consume(TokenKind::RightParen)?;
                 Ok(expr)
+            }
+            Token {
+                kind: TokenKind::LeftBracket,
+                span,
+                ..
+            } => {
+                let mut arr = vec![];
+                self.increment();
+                while self.cur().kind != TokenKind::RightBracket {
+                    arr.push(self.parse_expression()?);
+                    match self.cur().kind {
+                        TokenKind::Comma => self.increment(),
+                        TokenKind::RightBracket => {}
+                        TokenKind::EOF => eof_error!(
+                            self.cur().span,
+                            "Expected `]` or ',' but got EOF"
+                        ),
+                        _ => error!(
+                            self.cur().span,
+                            "Expected `]` or `,` but got {:?}",
+                            self.cur().kind
+                        ),
+                    }
+                }
+                let end = self.consume(TokenKind::RightBracket)?.span;
+                Ok(Rc::new(AST::ArrayLiteral(span.extend(&end), arr)))
             }
             Token {
                 kind: TokenKind::Pipe,

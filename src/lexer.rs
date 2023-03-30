@@ -126,8 +126,14 @@ impl Lexer {
                         );
                     }
                 }
-                '+' => self.push_simple(&mut tokens, TokenKind::Plus, 1),
-                '-' => self.push_simple(&mut tokens, TokenKind::Minus, 1),
+                '+' => match self.peek(1) {
+                    Some('+') => self.push_simple(&mut tokens, TokenKind::PlusPlus, 2),
+                    _ => self.push_simple(&mut tokens, TokenKind::Plus, 1),
+                },
+                '-' => match self.peek(1) {
+                    Some('-') => self.push_simple(&mut tokens, TokenKind::MinusMinus, 2),
+                    _ => self.push_simple(&mut tokens, TokenKind::Minus, 1),
+                },
                 '*' => self.push_simple(&mut tokens, TokenKind::Star, 1),
                 '/' => match self.peek(1) {
                     Some('/') => {
