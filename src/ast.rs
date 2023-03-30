@@ -46,8 +46,19 @@ pub enum AST {
     While(Span, Rc<AST>, Rc<AST>),
     Continue(Span),
     Break(Span),
-    For(Span, String, Rc<AST>, Rc<AST>),
+    ForEach(Span, String, Rc<AST>, Rc<AST>),
+    For {
+        span: Span,
+        init: Option<Rc<AST>>,
+        cond: Option<Rc<AST>>,
+        step: Option<Rc<AST>>,
+        body: Rc<AST>,
+    },
     Range(Span, Rc<AST>, Rc<AST>),
+
+    PostIncrement(Span, Rc<AST>, i64),
+    PreIncrement(Span, Rc<AST>, i64),
+    ArrayLiteral(Span, Vec<Rc<AST>>),
 }
 
 impl AST {
@@ -85,8 +96,12 @@ impl AST {
             AST::While(span, ..) => span,
             AST::Continue(span, ..) => span,
             AST::Break(span, ..) => span,
-            AST::For(span, ..) => span,
+            AST::ForEach(span, ..) => span,
+            AST::For { span, .. } => span,
             AST::Range(span, ..) => span,
+            AST::PostIncrement(span, ..) => span,
+            AST::PreIncrement(span, ..) => span,
+            AST::ArrayLiteral(span, ..) => span,
         }
     }
 }
@@ -108,10 +123,14 @@ impl std::fmt::Display for AST {
                     write!(f, "{}", arg)?;
                 }
                 write!(f, ")")
-            },
+            }
             AST::Divide(_, lhs, rhs) => write!(f, "({} / {})", lhs, rhs),
             AST::FloatLiteral(_, val) => write!(f, "{}", val),
-            AST::Function { name, .. } => write!(f, "def {} => ...", name.clone().unwrap_or_else(|| "<anon>".to_string())),
+            AST::Function { name, .. } => write!(
+                f,
+                "def {} => ...",
+                name.clone().unwrap_or_else(|| "<anon>".to_string())
+            ),
             AST::If(_, cond, ..) => write!(f, "if {}", cond),
             AST::Index(_, lhs, rhs) => write!(f, "{}[{}]", lhs, rhs),
             AST::IntegerLiteral(_, val) => write!(f, "{}", val),
@@ -122,7 +141,13 @@ impl std::fmt::Display for AST {
             AST::Or(_, lhs, rhs) => write!(f, "({} or {})", lhs, rhs),
             AST::Plus(_, lhs, rhs) => write!(f, "({} + {})", lhs, rhs),
             AST::Return(_, expr) => write!(f, "return {}", expr),
-            AST::Slice { lhs, start, end, step, .. } => {
+            AST::Slice {
+                lhs,
+                start,
+                end,
+                step,
+                ..
+            } => {
                 write!(f, "{}[", lhs)?;
                 if let Some(start) = start {
                     write!(f, "{}", start)?;
@@ -135,7 +160,7 @@ impl std::fmt::Display for AST {
                     write!(f, ":{}", step)?;
                 }
                 write!(f, "]")
-            },
+            }
             AST::StringLiteral(_, val) => write!(f, "\"{}\"", val),
             AST::VarDeclaration(_, name, expr) => write!(f, "let {} = {}", name, expr),
             AST::Variable(_, name) => write!(f, "{}", name),
@@ -148,8 +173,35 @@ impl std::fmt::Display for AST {
             AST::While(_, cond, ..) => write!(f, "while {}", cond),
             AST::Continue(_) => write!(f, "continue"),
             AST::Break(_) => write!(f, "break"),
-            AST::For(_, name, iter, ..) => write!(f, "for {} in {}", name, iter),
+            AST::ForEach(_, name, iter, ..) => write!(f, "for {} in {}", name, iter),
+            AST::For{init, cond, step, .. } => {
+                write!(f, "for (")?;
+                if let Some(init) = init {
+                    write!(f, "{}", init)?;
+                }
+                write!(f, "; ")?;
+                if let Some(cond) = cond {
+                    write!(f, "{}", cond)?;
+                }
+                write!(f, "; ")?;
+                if let Some(step) = step {
+                    write!(f, "{}", step)?;
+                }
+                write!(f, ")")
+            },
             AST::Range(_, start, end) => write!(f, "{}..{}", start, end),
+            AST::PostIncrement(_, expr, offset) => write!(f, "{}{}", expr, if *offset == 1 { "++" } else { "--" }),
+            AST::PreIncrement(_, expr, offset) => write!(f, "{}{}", if *offset == 1 { "++" } else { "--" }, expr),
+            AST::ArrayLiteral(_, exprs) => {
+                write!(f, "[")?;
+                for (i, expr) in exprs.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}", expr)?;
+                }
+                write!(f, "]")
+            }
         }
     }
 }

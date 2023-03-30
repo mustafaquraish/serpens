@@ -6,6 +6,7 @@ pub enum ErrorKind {
     Parser,
     UnexpectedEOF,
     Runtime,
+    Compiler,
 }
 
 #[derive(Debug)]
@@ -22,6 +23,7 @@ impl std::fmt::Display for Error {
                 write!(f, "SyntaxError: {}", self.message)
             }
             ErrorKind::Runtime => write!(f, "RuntimeError: {}", self.message),
+            ErrorKind::Compiler => write!(f, "CompileError: {}", self.message),
         }
     }
 }
@@ -72,6 +74,17 @@ macro_rules! runtime_error {
 }
 pub(crate) use runtime_error;
 
+macro_rules! compiler_error {
+    ($span:expr, $($arg:tt)*) => {
+        return Err(crate::error::Error{
+            kind: crate::error::ErrorKind::Compiler,
+            span: $span.clone(),
+            message: format!($($arg)*),
+        })
+    }
+}
+pub(crate) use compiler_error;
+
 
 impl Error {
     pub fn print_with_source(&self) {
@@ -103,7 +116,7 @@ impl Error {
 
         for line_no in min_line..max_line {
             let line = lines[line_no];
-            if start.line - 1 <= line_no && line_no <= end.line - 1 {
+            if start.line - 1 <= line_no && line_no < end.line {
                 let highlight_start = if line_no == start.line - 1 {
                     start.column - 1
                 } else {

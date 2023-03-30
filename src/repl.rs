@@ -1,5 +1,5 @@
 use crate::ast::AST;
-use crate::common::{Ref, get};
+use crate::common::Ref;
 use crate::error::{Error, Result, ErrorKind};
 use crate::interpreter::value::Value;
 use crate::interpreter::{Interpreter, Scope};
@@ -40,29 +40,16 @@ impl Repl {
             input.push_str(&temp);
             match self.try_parse(input.clone()) {
                 Ok(ast) => break ast,
-                Err(Error{kind: ErrorKind::UnexpectedEOF, ..}) => continue,
-                Err(err) => {
-                    if err.span.0.line == err.span.1.line {
-                        println!(
-                            "   {}\x1b[0;31m{}\x1b[0m{}",
-                            " ".repeat(err.span.0.column),
-                            "^".repeat(err.span.1.column - err.span.0.column),
-                            " ".repeat(input.len() - err.span.1.column)
-                        );
-
-                    } else {
-                        println!("\x1b[0;31m───{}╯\x1b[0m", "─".repeat(err.span.0.column));
-                    }
-                    return Err(err);
-                }
+                Err(Error{kind: ErrorKind::UnexpectedEOF, ..}) => {}
+                Err(err) => return Err(err),
             }
         };
         let val = self
             .interpreter
             .run_block_without_new_scope(&ast, self.global_scope.clone())?;
-        match get!(val) {
+        match &val {
             Value::Nothing => {}
-            _ => println!("{}", Value::repr(val.clone())),
+            _ => println!("{}", val.repr()),
         }
         Ok(())
     }
@@ -78,7 +65,17 @@ impl Repl {
         loop {
             match self.run_once() {
                 Ok(_) => {}
-                Err(err) => println!("\x1b[0;31m{}\x1b[0m", err),
+                Err(err) => {
+                    if err.span.0.line == err.span.1.line {
+                        let len = err.span.1.column - err.span.0.column;
+                        if len <= 1 {
+                            println!("   {}\x1b[0;31m▲\x1b[0m", " ".repeat(err.span.0.column));
+                        } else {
+                            println!("   {}\x1b[0;31m└{}┘\x1b[0m", " ".repeat(err.span.0.column), "─".repeat(len - 2));
+                        }
+                    }
+                    println!("\x1b[0;31m{}\x1b[0m", err);
+                }
             }
         }
     }

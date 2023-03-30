@@ -1,17 +1,16 @@
 use crate::ast::AST;
-use crate::common::{get, make, Ref, Span};
+use crate::common::{make, Ref, Span};
 use crate::error::{runtime_error as error, Result};
+use crate::interpreter::value::{IteratorValue, Value, Function};
 use std::collections::HashMap;
 use std::rc::Rc;
-
-use crate::interpreter::value::{IteratorValue, Value};
 
 mod builtin;
 pub mod value;
 
 #[derive(Debug)]
 pub struct Scope {
-    pub vars: HashMap<String, Ref<Value>>,
+    pub vars: HashMap<String, Value>,
     pub parent: Option<Ref<Scope>>,
     pub in_function: bool,
 }
@@ -25,7 +24,7 @@ impl Scope {
         })
     }
 
-    fn insert(&mut self, name: &str, value: Ref<Value>, update: bool, loc: &Span) -> Result<()> {
+    fn insert(&mut self, name: &str, value: Value, update: bool, loc: &Span) -> Result<()> {
         if !update || self.vars.contains_key(name) {
             self.vars.insert(name.to_string(), value);
         } else {
@@ -37,7 +36,7 @@ impl Scope {
         Ok(())
     }
 
-    fn get(&self, name: &str) -> Option<Ref<Value>> {
+    fn get(&self, name: &str) -> Option<Value> {
         if self.vars.contains_key(name) {
             self.vars.get(name).cloned()
         } else {
@@ -54,15 +53,14 @@ enum ControlFlow {
     None,
     Continue,
     Break,
-    Return(Ref<Value>),
+    Return(Value),
 }
 
-type BuiltInFunctionType = fn(&Span, Vec<Ref<Value>>) -> Result<Ref<Value>>;
+type BuiltInFunctionType = fn(&Span, Vec<Value>) -> Result<Value>;
 
 pub struct Interpreter {
     builtins: HashMap<&'static str, BuiltInFunctionType>,
     control_flow: ControlFlow,
-    the_nothing: Ref<Value>,
 }
 
 macro_rules! builtins {
@@ -82,11 +80,10 @@ impl Interpreter {
         Self {
             builtins,
             control_flow: ControlFlow::None,
-            the_nothing: make!(Value::Nothing),
         }
     }
 
-    pub fn execute(&mut self, ast: &Rc<AST>) -> Result<Ref<Value>> {
+    pub fn execute(&mut self, ast: &Rc<AST>) -> Result<Value> {
         let scope = Scope::new(None, false);
         self.run(ast, scope)
     }
@@ -95,39 +92,39 @@ impl Interpreter {
         &mut self,
         ast: &Rc<AST>,
         scope: Ref<Scope>,
-    ) -> Result<Ref<Value>> {
+    ) -> Result<Value> {
         match ast.as_ref() {
             AST::Block(_, stmts) => {
                 let mut last = None;
                 for stmt in stmts {
                     last = Some(self.run(stmt, scope.clone())?);
                 }
-                Ok(last.unwrap_or_else(|| self.the_nothing.clone()))
+                Ok(last.unwrap_or_else(|| Value::Nothing))
             }
             _ => unreachable!("run_block_without_scope called on non-block"),
         }
     }
 
-    fn run(&mut self, ast: &Rc<AST>, scope: Ref<Scope>) -> Result<Ref<Value>> {
+    fn run(&mut self, ast: &Rc<AST>, scope: Ref<Scope>) -> Result<Value> {
         macro_rules! dispatch_op {
             ($span:expr, $op:path, $left:expr, $right:expr) => {{
                 let left = self.run($left, scope.clone())?;
                 let right = self.run($right, scope.clone())?;
-                $op(left, right, $span)?
+                $op(&left, &right, $span)?
             }};
 
             ($span:expr, $op:path, $val:expr) => {{
                 let val = self.run($val, scope.clone())?;
-                $op(val, $span)?
+                $op(&val, $span)?
             }};
         }
         Ok(match ast.as_ref() {
             // Literals
-            AST::BooleanLiteral(_, value) => make!(Value::Boolean(*value)),
-            AST::IntegerLiteral(_, num) => make!(Value::Integer(*num)),
-            AST::FloatLiteral(_, num) => make!(Value::Float(*num)),
-            AST::StringLiteral(_, string) => make!(Value::String(string.clone())),
-            AST::Nothing(_) => self.the_nothing.clone(),
+            AST::BooleanLiteral(_, value) => Value::Boolean(*value),
+            AST::IntegerLiteral(_, num) => Value::Integer(*num),
+            AST::FloatLiteral(_, num) => Value::Float(*num),
+            AST::StringLiteral(_, string) => Value::String(make!(string.clone())),
+            AST::Nothing(_) => Value::Nothing,
 
             AST::Plus(span, left, right) => dispatch_op!(span, Value::plus, left, right),
             AST::Minus(span, left, right) => dispatch_op!(span, Value::minus, left, right),
@@ -161,13 +158,13 @@ impl Interpreter {
                 span,
                 ..
             } => {
-                let func = make!(Value::Function {
+                let func = Value::Function(make!(Function {
                     span: *span,
                     name: name.clone().unwrap_or_else(|| "<anon>".to_string()),
                     args: args.clone(),
                     body: body.clone(),
                     scope: scope.clone(),
-                });
+                }));
                 match name {
                     Some(name) => scope
                         .borrow_mut()
@@ -197,7 +194,7 @@ impl Interpreter {
                     .clone()
                     .map(|step| self.run(&step, scope.clone()))
                     .transpose()?;
-                Value::slice(lhs, start, end, step, span)?
+                lhs.slice(start, end, step, span)?
             }
 
             AST::Block(..) => {
@@ -207,7 +204,7 @@ impl Interpreter {
 
             AST::Variable(span, name) => {
                 if self.builtins.get(name.as_str()).is_some() {
-                    make!(Value::BuiltInFunction(name.clone()))
+                    Value::BuiltInFunction(make!(name.clone()))
                 } else if let Some(value) = scope.borrow_mut().get(name) {
                     value
                 } else {
@@ -220,26 +217,13 @@ impl Interpreter {
                     error!(span, "Return statement outside of function")
                 }
                 self.control_flow = ControlFlow::Return(self.run(val, scope)?);
-                self.the_nothing.clone()
+                Value::Nothing
             }
 
             AST::Assignment(span, lhs, value) => {
                 let value = self.run(value, scope.clone())?;
-                match lhs.as_ref() {
-                    AST::Variable(span, name) => {
-                        if scope.borrow_mut().get(name).is_none() {
-                            error!(span, "Variable {} doesn't exist", name)
-                        }
-                        if self.builtins.contains_key(name.as_str()) {
-                            error!(span, "`{}` is a built-in function, can't override it", name)
-                        }
-                        scope
-                            .borrow_mut()
-                            .insert(name, value.clone(), true, span)?;
-                        value
-                    }
-                    _ => error!(span, "Can't assign to {:?}", lhs),
-                }
+                self.handle_assign(scope, span, lhs, value.clone())?;
+                value
             }
 
             AST::VarDeclaration(span, name, value) => {
@@ -258,32 +242,30 @@ impl Interpreter {
 
             AST::Assert(loc, cond) => {
                 let cond = self.run(cond, scope)?;
-                match get!(cond) {
+                match cond {
                     Value::Boolean(true) => {}
                     Value::Boolean(false) => error!(loc, "Assertion failed"),
                     _ => error!(loc, "Assertion condition must be a boolean"),
                 }
-                self.the_nothing.clone()
+                Value::Nothing
             }
 
             AST::If(span, cond, body, else_body) => {
                 let cond = self.run(cond, scope.clone())?;
-                #[allow(clippy::let_and_return)]
-                let res = match get!(cond) {
+                match cond {
                     Value::Boolean(true) => self.run(body, scope)?,
                     Value::Boolean(false) => match else_body {
                         Some(else_body) => self.run(else_body, scope)?,
-                        None => self.the_nothing.clone(),
+                        None => Value::Nothing,
                     },
                     _ => error!(span, "If condition must be a boolean"),
-                };
-                res
+                }
             }
 
             AST::While(span, cond, body) => {
                 loop {
                     let cond = self.run(cond, scope.clone())?;
-                    match get!(cond) {
+                    match cond {
                         Value::Boolean(true) => {
                             self.run(body, scope.clone())?;
                             match self.control_flow {
@@ -300,13 +282,13 @@ impl Interpreter {
                         _ => error!(span, "While condition must be a boolean"),
                     };
                 }
-                self.the_nothing.clone()
+                Value::Nothing
             }
 
-            AST::For(span, loop_var, iter, body) => {
+            AST::ForEach(span, loop_var, iter, body) => {
                 let val = self.run(iter, scope.clone())?;
-                let iter = Value::iterator(val, span)?;
-                match get!(iter) {
+                let iter = val.iterator(span)?;
+                match iter {
                     Value::Iterator(IteratorValue(iter)) => {
                         let iter = &mut *(*iter).borrow_mut();
                         for val in iter {
@@ -329,30 +311,122 @@ impl Interpreter {
                     }
                     _ => error!(span, "For loop must iterate over an iterable"),
                 };
-                self.the_nothing.clone()
+                Value::Nothing
+            }
+
+            AST::For {
+                span,
+                init,
+                cond,
+                step,
+                body,
+            } => {
+                let loop_scope = Scope::new(Some(scope.clone()), scope.borrow().in_function);
+                if let Some(init) = init {
+                    self.run(init, loop_scope.clone())?;
+                }
+                loop {
+                    if let Some(cond) = cond {
+                        let cond = self.run(cond, loop_scope.clone())?;
+                        match cond {
+                            Value::Boolean(true) => {}
+                            Value::Boolean(false) => break,
+                            _ => error!(span, "For condition must be a boolean"),
+                        };
+                    }
+                    self.run(body, loop_scope.clone())?;
+                    match self.control_flow {
+                        ControlFlow::None => {}
+                        ControlFlow::Continue => self.control_flow = ControlFlow::None,
+                        ControlFlow::Break => {
+                            self.control_flow = ControlFlow::None;
+                            break;
+                        }
+                        ControlFlow::Return(_) => break,
+                    }
+                    if let Some(step) = step {
+                        self.run(step, loop_scope.clone())?;
+                    }
+                }
+                Value::Nothing
             }
 
             AST::Range(span, start, end) => {
                 let start = self.run(start, scope.clone())?;
                 let end = self.run(end, scope)?;
-                Value::create_range(start, end, span)?
+                Value::create_range(&start, &end, span)?
             }
 
             AST::Break(_) => {
                 self.control_flow = ControlFlow::Break;
-                self.the_nothing.clone()
+                Value::Nothing
             }
             AST::Continue(_) => {
                 self.control_flow = ControlFlow::Continue;
-                self.the_nothing.clone()
+                Value::Nothing
             }
 
             AST::Index(span, left, right) => {
                 let left = self.run(left, scope.clone())?;
                 let right = self.run(right, scope)?;
-                Value::index(left, right, span)?
+                left.index(&right, span)?
+            },
+
+            AST::PostIncrement(span, expr, offset) => {
+                let value = self.run(expr, scope.clone())?;
+                match &value {
+                    Value::Integer(val) => {
+                        let new_val = Value::Integer(*val + offset);
+                        self.handle_assign(scope, span, expr, new_val)?;
+                    }
+                    _ => error!(span, "Operation only supported for integers"),
+                }
+                value
+            },
+            AST::PreIncrement(span, expr, offset) => {
+                let value = self.run(expr, scope.clone())?;
+                match &value {
+                    Value::Integer(val) => {
+                        let new_val = Value::Integer(*val + offset);
+                        self.handle_assign(scope, span, expr, new_val.clone())?;
+                        new_val
+                    }
+                    _ => error!(span, "Operation only supported for integers"),
+                }
+            },
+
+            AST::ArrayLiteral(_, arr) => {
+                Value::Array(make!(
+                    arr.iter()
+                        .map(|x| self.run(x, scope.clone()))
+                        .collect::<Result<Vec<_>>>()?
+                ))
             }
         })
+    }
+
+    fn handle_assign(
+        &mut self,
+        scope: Ref<Scope>,
+        span: &Span,
+        left: &Rc<AST>,
+        value: Value,
+    ) -> Result<()> {
+        match &**left {
+            AST::Variable(span, name) => {
+                if scope.borrow_mut().get(name.as_str()).is_none() {
+                    error!(span, "Variable {} doesn't exist", name)
+                }
+                if self.builtins.contains_key(name.as_str()) {
+                    error!(span, "`{}` is a built-in function, can't override it", name)
+                }
+                scope
+                    .borrow_mut()
+                    .insert(name.as_str(), value, true, span)?;
+            }
+            _ => error!(span, "Invalid assignment target"),
+        }
+        Ok(())
     }
 
     fn handle_call(
@@ -361,44 +435,40 @@ impl Interpreter {
         span: &Span,
         func: &Rc<AST>,
         args: &[Rc<AST>],
-    ) -> Result<Ref<Value>> {
+    ) -> Result<Value> {
         let func = self.run(func, scope.clone())?;
         let args = args
             .iter()
             .map(|arg| self.run(arg, scope.clone()))
             .collect::<Result<Vec<_>>>()?;
 
-        return Ok(match get!(func) {
-            Value::Function {
-                body,
-                args: func_args,
-                scope: closure_scope,
-                ..
-            } => {
-                let new_scope = Scope::new(Some(closure_scope.clone()), true);
-                if args.len() != func_args.len() {
+        return Ok(match func {
+            Value::Function(func) => {
+                let new_scope = Scope::new(Some(func.borrow().scope.clone()), true);
+                if args.len() != func.borrow().args.len() {
                     error!(
                         *span,
                         "Expected {} arguments, got {}",
-                        func_args.len(),
+                        func.borrow().args.len(),
                         args.len()
                     )
                 }
-                for (arg, value) in func_args.iter().zip(args) {
+                for (arg, value) in func.borrow().args.iter().zip(args) {
                     new_scope.borrow_mut().insert(arg, value, false, span)?;
                 }
-                self.run(body, new_scope)?;
+                let body = func.borrow().body.clone();
+                self.run(&body, new_scope)?;
                 let value = if let ControlFlow::Return(value) = &self.control_flow {
                     value.clone()
                 } else {
-                    self.the_nothing.clone()
+                    Value::Nothing
                 };
                 self.control_flow = ControlFlow::None;
                 value
             }
-            Value::BuiltInFunction(func) => match self.builtins.get(func.as_str()) {
+            Value::BuiltInFunction(func) => match self.builtins.get(func.borrow().as_str()) {
                 Some(func) => func(span, args)?,
-                None => error!(span, "Built-in function {} not found", func),
+                None => error!(span, "Built-in function {} not found", func.borrow()),
             },
             x => error!(span, "Can't call object {:?}", x),
         });
